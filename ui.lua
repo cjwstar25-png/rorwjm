@@ -1,42 +1,51 @@
---!strict2
-local P = game:GetService("Players")
-local U = game:GetService("UserInputService")
-local T = game:GetService("TweenService")
+--!strict
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
+local TextService = game:GetService("TextService")
 
-local L = P.LocalPlayer
-local G = L:WaitForChild("PlayerGui")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-local function S(a: string, b: string, c: string): string
+local function safeGetIndex(source: any): any
+	if type(source) ~= "table" then
+		return nil
+	end
+	return source.index
+end
+
+local function safeConcat(a: string, b: string, c: string): string
 	return table.concat({ a, b, c })
 end
 
-local function N(n: number, a: number, b: number): number
-	if n < a then
-		return a
+local function clamp(n: number, minValue: number, maxValue: number): number
+	if n < minValue then
+		return minValue
 	end
-	if n > b then
-		return b
+	if n > maxValue then
+		return maxValue
 	end
 	return n
 end
 
-local function M(className: string, props: { [string]: any }?)
-	local o = Instance.new(className)
+local function create(className: string, props: { [string]: any }?)
+	local inst = Instance.new(className)
 	if props then
 		for k, v in pairs(props) do
-			o[k] = v
+			inst[k] = v
 		end
 	end
-	return o
+	return inst
 end
 
-local function Tw(inst: Instance, ti: TweenInfo, goal: { [string]: any })
-	local tw = T:Create(inst, ti, goal)
+local function tween(inst: Instance, info: TweenInfo, goal: { [string]: any })
+	local tw = TweenService:Create(inst, info, goal)
 	tw:Play()
 	return tw
 end
 
-local function Cnt(t: any): number
+local function countTable(t: any): number
 	if type(t) ~= "table" then
 		return 0
 	end
@@ -47,41 +56,65 @@ local function Cnt(t: any): number
 	return c
 end
 
-local function GR(a: string): string
-	if a == "" then
+local function firstGrapheme(s: string): string
+	if s == "" then
 		return ""
 	end
-	local r = ""
-	for s, e in utf8.graphemes(a) do
-		r = string.sub(a, s, e)
-		break
+	for startIndex, endIndex in utf8.graphemes(s) do
+		return string.sub(s, startIndex, endIndex)
 	end
-	return r
+	return ""
 end
 
-local function GL(a: string): string
-	if a == "" then
+local function lastGrapheme(s: string): string
+	if s == "" then
 		return ""
 	end
-	local r = ""
-	for s, e in utf8.graphemes(a) do
-		r = string.sub(a, s, e)
+	local result = ""
+	for startIndex, endIndex in utf8.graphemes(s) do
+		result = string.sub(s, startIndex, endIndex)
 	end
-	return r
+	return result
 end
 
-local UURL = S("https://", "raw.github", "usercontent.com/cjwstar25-png/rorwjm/main/word.lua")
+local function getClipParent(): Instance
+	local ok = pcall(function()
+		CoreGui:GetChildren()
+	end)
 
-local ok, Hub = pcall(function()
-	return loadstring(game:HttpGet(UURL))()
+	if ok then
+		local existing = CoreGui:FindFirstChild("WordScriptCoreUI")
+		if existing then
+			existing:Destroy()
+		end
+		return CoreGui
+	end
+
+	local existing = PlayerGui:FindFirstChild("WordScriptCoreUI")
+	if existing then
+		existing:Destroy()
+	end
+	return PlayerGui
+end
+
+local parentGui = getClipParent()
+
+local hubUrl = safeConcat(
+	"https://raw.github",
+	"usercontent.com",
+	"/cjwstar25-png/rorwjm/main/word.lua"
+)
+
+local okHub, Hub = pcall(function()
+	return loadstring(game:HttpGet(hubUrl))()
 end)
 
-if not ok or type(Hub) ~= "table" then
-	warn("[WordScript] load failed")
+if not okHub or type(Hub) ~= "table" then
+	warn("[WordScript] Hub load failed")
 	return
 end
 
-local IDX = Hub.index
+local IDX = safeGetIndex(Hub)
 if not IDX then
 	if type(Hub.buildIndex) == "function" then
 		IDX = Hub.buildIndex()
@@ -92,55 +125,87 @@ if not IDX then
 	end
 end
 
-local Gui = M("ScreenGui", {
-	Name = "WordScriptGui",
+local function isPriority(word: string): boolean
+	if type(Hub.isPriority) == "function" then
+		local ok, result = pcall(Hub.isPriority, word)
+		return ok and result == true
+	end
+	return false
+end
+
+local function getStatsText(): string
+	if type(Hub.getStats) == "function" then
+		local ok, st = pcall(Hub.getStats)
+		if ok and type(st) == "table" then
+			return string.format(
+				"그룹 %d · 전체 %d · 우선 %d",
+				tonumber(st.groups) or 0,
+				tonumber(st.unique) or 0,
+				tonumber(st.special) or 0
+			)
+		end
+	end
+	return "준비 완료"
+end
+
+local Gui = create("ScreenGui", {
+	Name = "WordScriptCoreUI",
 	ResetOnSpawn = false,
 	IgnoreGuiInset = true,
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-	Parent = G,
+	DisplayOrder = 999999,
+	Parent = parentGui,
 })
 
-local Shade = M("Frame", {
+local Shade = create("Frame", {
 	Name = "Shade",
 	BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-	BackgroundTransparency = 0.58,
+	BackgroundTransparency = 0.55,
 	BorderSizePixel = 0,
-	Size = UDim2.fromOffset(364, 256),
+	Size = UDim2.fromOffset(368, 262),
 	Position = UDim2.new(0.68, 4, 0.22, 6),
 	Parent = Gui,
 })
-M("UICorner", { CornerRadius = UDim.new(0, 14), Parent = Shade })
+create("UICorner", { CornerRadius = UDim.new(0, 14), Parent = Shade })
 
-local Root = M("Frame", {
+local Root = create("Frame", {
 	Name = "Root",
-	Size = UDim2.fromOffset(360, 250),
+	Size = UDim2.fromOffset(360, 254),
 	Position = UDim2.new(0.68, 0, 0.22, 0),
 	BackgroundColor3 = Color3.fromRGB(18, 18, 22),
 	BorderSizePixel = 0,
 	ClipsDescendants = true,
 	Parent = Gui,
 })
-M("UICorner", { CornerRadius = UDim.new(0, 14), Parent = Root })
-M("UIStroke", { Color = Color3.fromRGB(62, 62, 74), Thickness = 1, Transparency = 0.12, Parent = Root })
-
-local Scale = M("UIScale", { Scale = 0.96, Parent = Root })
-
-M("UISizeConstraint", {
-	MinSize = Vector2.new(320, 200),
-	MaxSize = Vector2.new(820, 640),
+create("UICorner", { CornerRadius = UDim.new(0, 14), Parent = Root })
+create("UIStroke", {
+	Color = Color3.fromRGB(64, 64, 76),
+	Thickness = 1,
+	Transparency = 0.12,
 	Parent = Root,
 })
 
-local Bar = M("Frame", {
+local Scale = create("UIScale", {
+	Scale = 0.96,
+	Parent = Root,
+})
+
+create("UISizeConstraint", {
+	MinSize = Vector2.new(320, 200),
+	MaxSize = Vector2.new(920, 680),
+	Parent = Root,
+})
+
+local Bar = create("Frame", {
 	Name = "Bar",
 	Size = UDim2.new(1, 0, 0, 32),
 	BackgroundColor3 = Color3.fromRGB(24, 24, 30),
 	BorderSizePixel = 0,
 	Parent = Root,
 })
-M("UICorner", { CornerRadius = UDim.new(0, 14), Parent = Bar })
+create("UICorner", { CornerRadius = UDim.new(0, 14), Parent = Bar })
 
-M("Frame", {
+create("Frame", {
 	Size = UDim2.new(1, 0, 0, 10),
 	Position = UDim2.new(0, 0, 1, -10),
 	BackgroundColor3 = Color3.fromRGB(24, 24, 30),
@@ -148,7 +213,7 @@ M("Frame", {
 	Parent = Bar,
 })
 
-M("Frame", {
+create("Frame", {
 	Size = UDim2.new(1, -20, 0, 1),
 	Position = UDim2.new(0, 10, 1, -1),
 	BackgroundColor3 = Color3.fromRGB(45, 45, 55),
@@ -156,20 +221,20 @@ M("Frame", {
 	Parent = Bar,
 })
 
-local T1 = M("TextLabel", {
+local Title = create("TextLabel", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
-	Text = "WordScript",
-	TextColor3 = Color3.fromRGB(240, 240, 246),
+	Text = "WordScript CoreUI",
+	TextColor3 = Color3.fromRGB(242, 242, 248),
 	TextSize = 13,
 	Font = Enum.Font.GothamSemibold,
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Parent = Bar,
 })
-T1.Position = UDim2.new(0, 12, 0, 0)
-T1.Size = UDim2.new(1, -120, 1, 0)
+Title.Position = UDim2.new(0, 12, 0, 0)
+Title.Size = UDim2.new(1, -120, 1, 0)
 
-local T2 = M("TextLabel", {
+local Subtitle = create("TextLabel", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	Text = "검색 · 추천 · 복사",
@@ -179,24 +244,24 @@ local T2 = M("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 	Parent = Bar,
 })
-T2.Position = UDim2.new(0, 86, 0, 0)
-T2.Size = UDim2.new(1, -190, 1, 0)
+Subtitle.Position = UDim2.new(0, 108, 0, 0)
+Subtitle.Size = UDim2.new(1, -190, 1, 0)
 
-local MinB = M("TextButton", {
+local MinButton = create("TextButton", {
 	Size = UDim2.fromOffset(24, 18),
 	Position = UDim2.new(1, -54, 0, 7),
 	BackgroundColor3 = Color3.fromRGB(39, 39, 48),
 	BorderSizePixel = 0,
 	Text = "–",
-	TextColor3 = Color3.fromRGB(230, 230, 240),
+	TextColor3 = Color3.fromRGB(232, 232, 240),
 	TextSize = 14,
 	Font = Enum.Font.GothamBold,
 	AutoButtonColor = false,
 	Parent = Bar,
 })
-M("UICorner", { CornerRadius = UDim.new(0, 6), Parent = MinB })
+create("UICorner", { CornerRadius = UDim.new(0, 6), Parent = MinButton })
 
-local ClsB = M("TextButton", {
+local CloseButton = create("TextButton", {
 	Size = UDim2.fromOffset(24, 18),
 	Position = UDim2.new(1, -26, 0, 7),
 	BackgroundColor3 = Color3.fromRGB(55, 36, 40),
@@ -208,9 +273,9 @@ local ClsB = M("TextButton", {
 	AutoButtonColor = false,
 	Parent = Bar,
 })
-M("UICorner", { CornerRadius = UDim.new(0, 6), Parent = ClsB })
+create("UICorner", { CornerRadius = UDim.new(0, 6), Parent = CloseButton })
 
-local Body = M("Frame", {
+local Body = create("Frame", {
 	Name = "Body",
 	Size = UDim2.new(1, 0, 1, -32),
 	Position = UDim2.new(0, 0, 0, 32),
@@ -218,7 +283,7 @@ local Body = M("Frame", {
 	Parent = Root,
 })
 
-M("UIPadding", {
+create("UIPadding", {
 	PaddingLeft = UDim.new(0, 10),
 	PaddingRight = UDim.new(0, 10),
 	PaddingTop = UDim.new(0, 10),
@@ -226,41 +291,41 @@ M("UIPadding", {
 	Parent = Body,
 })
 
-local SW = M("Frame", {
-	Name = "SW",
+local SearchWrap = create("Frame", {
+	Name = "SearchWrap",
 	Size = UDim2.new(1, 0, 0, 34),
 	BackgroundColor3 = Color3.fromRGB(25, 25, 31),
 	BorderSizePixel = 0,
 	Parent = Body,
 })
-M("UICorner", { CornerRadius = UDim.new(0, 10), Parent = SW })
-local SStroke = M("UIStroke", {
+create("UICorner", { CornerRadius = UDim.new(0, 10), Parent = SearchWrap })
+local SearchStroke = create("UIStroke", {
 	Color = Color3.fromRGB(49, 49, 60),
 	Thickness = 1,
 	Transparency = 0.05,
-	Parent = SW,
+	Parent = SearchWrap,
 })
 
-local Search = M("TextBox", {
+local SearchBox = create("TextBox", {
 	Size = UDim2.new(1, -16, 1, 0),
 	Position = UDim2.new(0, 8, 0, 0),
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
-	PlaceholderText = "끝글자 또는 검색어 입력",
+	PlaceholderText = "시작글자 또는 검색어 입력",
 	PlaceholderColor3 = Color3.fromRGB(130, 130, 140),
 	Text = "",
 	ClearTextOnFocus = false,
 	TextColor3 = Color3.fromRGB(246, 246, 250),
 	TextSize = 12,
 	Font = Enum.Font.Gotham,
-	Parent = SW,
+	Parent = SearchWrap,
 })
 
-local Mode = M("TextLabel", {
+local Mode = create("TextLabel", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	Text = "준비 중",
-	TextColor3 = Color3.fromRGB(180, 180, 190),
+	TextColor3 = Color3.fromRGB(182, 182, 190),
 	TextSize = 11,
 	Font = Enum.Font.GothamSemibold,
 	TextXAlignment = Enum.TextXAlignment.Left,
@@ -269,7 +334,7 @@ local Mode = M("TextLabel", {
 Mode.Position = UDim2.new(0, 2, 0, 46)
 Mode.Size = UDim2.new(1, -4, 0, 16)
 
-local Stats = M("TextLabel", {
+local Stats = create("TextLabel", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	Text = "불러오는 중...",
@@ -282,7 +347,7 @@ local Stats = M("TextLabel", {
 Stats.Position = UDim2.new(0, 2, 0, 60)
 Stats.Size = UDim2.new(1, -4, 0, 14)
 
-local Results = M("ScrollingFrame", {
+local Results = create("ScrollingFrame", {
 	Name = "Results",
 	Size = UDim2.new(1, 0, 1, -96),
 	Position = UDim2.new(0, 0, 0, 78),
@@ -294,19 +359,19 @@ local Results = M("ScrollingFrame", {
 	Parent = Body,
 })
 
-local List = M("UIListLayout", {
+local Layout = create("UIListLayout", {
 	SortOrder = Enum.SortOrder.LayoutOrder,
 	Padding = UDim.new(0, 6),
 	Parent = Results,
 })
 
-M("UIPadding", {
+create("UIPadding", {
 	PaddingTop = UDim.new(0, 2),
 	PaddingBottom = UDim.new(0, 2),
 	Parent = Results,
 })
 
-local Foot = M("Frame", {
+local Foot = create("Frame", {
 	Name = "Foot",
 	Size = UDim2.new(1, 0, 0, 18),
 	Position = UDim2.new(0, 0, 1, -18),
@@ -314,7 +379,7 @@ local Foot = M("Frame", {
 	Parent = Body,
 })
 
-local Hint = M("TextLabel", {
+local Hint = create("TextLabel", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	Text = "클릭 시 단어 복사",
@@ -326,7 +391,7 @@ local Hint = M("TextLabel", {
 })
 Hint.Size = UDim2.new(1, -110, 1, 0)
 
-local Toast = M("TextLabel", {
+local Toast = create("TextLabel", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
 	Text = "",
@@ -340,7 +405,7 @@ local Toast = M("TextLabel", {
 Toast.Size = UDim2.new(0, 110, 1, 0)
 Toast.Position = UDim2.new(1, -110, 0, 0)
 
-local RH = M("TextButton", {
+local ResizeHandle = create("TextButton", {
 	Name = "ResizeHandle",
 	Size = UDim2.fromOffset(24, 24),
 	Position = UDim2.new(1, -24, 1, -24),
@@ -353,86 +418,113 @@ local RH = M("TextButton", {
 	AutoButtonColor = false,
 	Parent = Root,
 })
-M("UICorner", { CornerRadius = UDim.new(0, 8), Parent = RH })
-M("UIStroke", { Color = Color3.fromRGB(58, 58, 70), Thickness = 1, Transparency = 0.15, Parent = RH })
+create("UICorner", { CornerRadius = UDim.new(0, 8), Parent = ResizeHandle })
+create("UIStroke", {
+	Color = Color3.fromRGB(58, 58, 70),
+	Thickness = 1,
+	Transparency = 0.15,
+	Parent = ResizeHandle,
+})
 
-local function BtnStyle(B: TextButton, normalBg: Color3, hoverBg: Color3)
-	B.BackgroundColor3 = normalBg
-	B.MouseEnter:Connect(function()
-		Tw(B, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundColor3 = hoverBg })
+local function styleButton(btn: TextButton, normalBg: Color3, hoverBg: Color3)
+	btn.BackgroundColor3 = normalBg
+	btn.MouseEnter:Connect(function()
+		tween(btn, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			BackgroundColor3 = hoverBg,
+		})
 	end)
-	B.MouseLeave:Connect(function()
-		Tw(B, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundColor3 = normalBg })
+	btn.MouseLeave:Connect(function()
+		tween(btn, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			BackgroundColor3 = normalBg,
+		})
 	end)
-	B.MouseButton1Down:Connect(function()
-		Tw(B, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundColor3 = hoverBg })
+	btn.MouseButton1Down:Connect(function()
+		tween(btn, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			BackgroundColor3 = hoverBg,
+		})
 	end)
-	B.MouseButton1Up:Connect(function()
-		Tw(B, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundColor3 = hoverBg })
+	btn.MouseButton1Up:Connect(function()
+		tween(btn, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			BackgroundColor3 = hoverBg,
+		})
 	end)
 end
 
-BtnStyle(MinB, Color3.fromRGB(39, 39, 48), Color3.fromRGB(49, 49, 60))
-BtnStyle(ClsB, Color3.fromRGB(55, 36, 40), Color3.fromRGB(76, 44, 50))
+styleButton(MinButton, Color3.fromRGB(39, 39, 48), Color3.fromRGB(49, 49, 60))
+styleButton(CloseButton, Color3.fromRGB(55, 36, 40), Color3.fromRGB(76, 44, 50))
 
 local minimized = false
 local dragging = false
 local resizing = false
-
 local dragStart: Vector2? = nil
 local dragPos: UDim2? = nil
-
 local resizeStart: Vector2? = nil
 local resizeSize: Vector2? = nil
 
 local MIN_W, MIN_H = 320, 200
-local MAX_W, MAX_H = 820, 640
+local MAX_W, MAX_H = 920, 680
 
-local function SyncShade()
+local function syncShade()
 	Shade.Size = UDim2.fromOffset(Root.AbsoluteSize.X + 8, Root.AbsoluteSize.Y + 8)
-	Shade.Position = UDim2.new(Root.Position.X.Scale, Root.Position.X.Offset + 4, Root.Position.Y.Scale, Root.Position.Y.Offset + 6)
+	Shade.Position = UDim2.new(
+		Root.Position.X.Scale,
+		Root.Position.X.Offset + 4,
+		Root.Position.Y.Scale,
+		Root.Position.Y.Offset + 6
+	)
 end
 
-local function SafeSetSize(w: number, h: number)
-	Root.Size = UDim2.fromOffset(N(w, MIN_W, MAX_W), N(h, MIN_H, MAX_H))
-	SyncShade()
+local function refreshCanvas()
+	Results.CanvasSize = UDim2.new(0, 0, 0, Layout.AbsoluteContentSize.Y + 6)
 end
 
-local function OpenAnim()
+local function safeSetSize(w: number, h: number)
+	Root.Size = UDim2.fromOffset(clamp(w, MIN_W, MAX_W), clamp(h, MIN_H, MAX_H))
+	syncShade()
+	refreshCanvas()
+end
+
+local function openAnim()
 	Scale.Scale = 0.96
-	Tw(Scale, TweenInfo.new(0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { Scale = 1 })
+	tween(Scale, TweenInfo.new(0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+		Scale = 1,
+	})
 end
 
-local function FadeToast(msg: string)
+local function fadeToast(msg: string)
 	Toast.Text = msg
 	Toast.TextTransparency = 1
-	Tw(Toast, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 0 })
+	tween(Toast, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		TextTransparency = 0,
+	})
 	task.delay(1.15, function()
 		if Toast.Parent then
-			Tw(Toast, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 1 })
+			tween(Toast, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				TextTransparency = 1,
+			})
 		end
 	end)
 end
 
-local function CopyWord(w: string)
+local function copyWord(word: string)
 	if typeof(setclipboard) == "function" then
-		setclipboard(w)
-		FadeToast("복사됨")
+		setclipboard(word)
+		fadeToast("복사됨")
 	else
-		FadeToast("클립보드 미지원")
+		fadeToast("클립보드 미지원")
 	end
 end
 
-local function ClearResults()
-	for _, ch in ipairs(Results:GetChildren()) do
-		if ch:IsA("GuiObject") and ch ~= List then
-			ch:Destroy()
+local function clearResults()
+	for _, child in ipairs(Results:GetChildren()) do
+		if child:IsA("GuiObject") and child ~= Layout then
+			child:Destroy()
 		end
 	end
 end
 
-local function AddItem(word: string, tagColor: Color3?)
-	local item = M("TextButton", {
+local function addItem(word: string, tagColor: Color3?)
+	local item = create("TextButton", {
 		Size = UDim2.new(1, 0, 0, 26),
 		BackgroundColor3 = Color3.fromRGB(24, 24, 30),
 		BorderSizePixel = 0,
@@ -440,24 +532,23 @@ local function AddItem(word: string, tagColor: Color3?)
 		AutoButtonColor = false,
 		Parent = Results,
 	})
-	M("UICorner", { CornerRadius = UDim.new(0, 9), Parent = item })
-	local st = M("UIStroke", {
+	create("UICorner", { CornerRadius = UDim.new(0, 9), Parent = item })
+	local stroke = create("UIStroke", {
 		Color = Color3.fromRGB(44, 44, 54),
 		Thickness = 1,
 		Transparency = 0.1,
 		Parent = item,
 	})
-
-	local a = M("Frame", {
+	local accent = create("Frame", {
 		Size = UDim2.new(0, 4, 1, -10),
 		Position = UDim2.new(0, 8, 0, 5),
 		BackgroundColor3 = tagColor or Color3.fromRGB(110, 130, 255),
 		BorderSizePixel = 0,
 		Parent = item,
 	})
-	M("UICorner", { CornerRadius = UDim.new(1, 0), Parent = a })
+	create("UICorner", { CornerRadius = UDim.new(1, 0), Parent = accent })
 
-	local lab = M("TextLabel", {
+	local label = create("TextLabel", {
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		Text = word,
@@ -467,46 +558,43 @@ local function AddItem(word: string, tagColor: Color3?)
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Parent = item,
 	})
-	lab.Position = UDim2.new(0, 20, 0, 0)
-	lab.Size = UDim2.new(1, -28, 1, 0)
+	label.Position = UDim2.new(0, 20, 0, 0)
+	label.Size = UDim2.new(1, -28, 1, 0)
 
-	local function hov(on: boolean)
+	local function hover(on: boolean)
 		if on then
-			Tw(item, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			tween(item, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				BackgroundColor3 = Color3.fromRGB(30, 30, 38),
 			})
-			Tw(st, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			tween(stroke, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				Color = Color3.fromRGB(66, 66, 78),
 			})
 		else
-			Tw(item, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			tween(item, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				BackgroundColor3 = Color3.fromRGB(24, 24, 30),
 			})
-			Tw(st, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			tween(stroke, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 				Color = Color3.fromRGB(44, 44, 54),
 			})
 		end
 	end
 
 	item.MouseEnter:Connect(function()
-		hov(true)
+		hover(true)
 	end)
 	item.MouseLeave:Connect(function()
-		hov(false)
+		hover(false)
 	end)
 	item.MouseButton1Click:Connect(function()
-		CopyWord(word)
+		copyWord(word)
 	end)
 end
 
-local function SortWords(list: { string })
+local function sortWords(list: { string })
 	table.sort(list, function(a: string, b: string)
-		local ap = false
-		local bp = false
-		if type(Hub.isPriority) == "function" then
-			ap = Hub.isPriority(a) and true or false
-			bp = Hub.isPriority(b) and true or false
-		end
+		local ap = isPriority(a)
+		local bp = isPriority(b)
+
 		if ap ~= bp then
 			return ap and not bp
 		end
@@ -517,14 +605,14 @@ local function SortWords(list: { string })
 	end)
 end
 
-local function Collect(q: string): { string }
+local function collect(query: string): { string }
 	local out: { string } = {}
 	local seen: { [string]: boolean } = {}
 
-	local function push(w: string)
-		if not seen[w] then
-			seen[w] = true
-			table.insert(out, w)
+	local function push(word: string)
+		if not seen[word] then
+			seen[word] = true
+			table.insert(out, word)
 		end
 	end
 
@@ -532,42 +620,45 @@ local function Collect(q: string): { string }
 	local all = IDX and IDX.all or {}
 	local byFirst = IDX and IDX.byFirst or {}
 
-	if q == "" then
+	if query == "" then
 		if type(special) == "table" then
-			for _, w in ipairs(special) do
-				if type(w) == "string" then
-					push(w)
+			for _, word in ipairs(special) do
+				if type(word) == "string" then
+					push(word)
 				end
 			end
 		end
 		return out
 	end
 
-	local seed = GL(q)
+	local seed = lastGrapheme(query)
 
 	if seed ~= "" then
-		local first = byFirst[seed]
-		if type(first) == "table" then
-			for _, w in ipairs(first) do
-				if type(w) == "string" then
-					push(w)
+		local firstList = byFirst[seed]
+		if type(firstList) == "table" then
+			for _, word in ipairs(firstList) do
+				if type(word) == "string" then
+					push(word)
 				end
 			end
 		end
 	end
 
-	if #q > 1 then
-		for _, w in ipairs(all) do
-			if type(w) == "string" and string.find(w, q, 1, true) then
-				push(w)
+	if #query > 1 then
+		for _, word in ipairs(all) do
+			if type(word) == "string" and string.find(word, query, 1, true) then
+				push(word)
 			end
 		end
 	end
 
 	if type(special) == "table" then
-		for _, w in ipairs(special) do
-			if type(w) == "string" and (string.find(w, q, 1, true) or (seed ~= "" and string.find(w, seed, 1, true))) then
-				push(w)
+		for _, word in ipairs(special) do
+			if type(word) == "string" and (
+				string.find(word, query, 1, true) or
+				(seed ~= "" and string.find(word, seed, 1, true))
+			) then
+				push(word)
 			end
 		end
 	end
@@ -575,11 +666,11 @@ local function Collect(q: string): { string }
 	return out
 end
 
-local function SetStats(q: string, count: number)
-	if q == "" then
+local function setStats(query: string, count: number)
+	if query == "" then
 		Mode.Text = "특수 단어"
-		Stats.Text = string.format("전체 %d개 · 특수 %d개", Cnt(IDX and IDX.all or {}), Cnt(Hub.special or {}))
-	elseif #q == 1 then
+		Stats.Text = string.format("전체 %d개 · 특수 %d개", countTable(IDX and IDX.all or {}), countTable(Hub.special or {}))
+	elseif #query == 1 then
 		Mode.Text = "끝글자 추천"
 		Stats.Text = string.format("%d개", count)
 	else
@@ -588,18 +679,18 @@ local function SetStats(q: string, count: number)
 	end
 end
 
-local function Refresh()
-	local q = Search.Text or ""
-	q = q:gsub("%s+", "")
+local function refresh()
+	local query = SearchBox.Text or ""
+	query = query:gsub("%s+", "")
 
-	ClearResults()
+	clearResults()
 
-	local found = Collect(q)
-	SortWords(found)
-	SetStats(q, #found)
+	local found = collect(query)
+	sortWords(found)
+	setStats(query, #found)
 
 	if #found == 0 then
-		local empty = M("TextLabel", {
+		local empty = create("TextLabel", {
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			Text = "결과 없음",
@@ -610,67 +701,69 @@ local function Refresh()
 			Parent = Results,
 		})
 		empty.Size = UDim2.new(1, 0, 0, 24)
-		Results.CanvasSize = UDim2.new(0, 0, 0, List.AbsoluteContentSize.Y + 6)
+		refreshCanvas()
 		return
 	end
 
-	if q == "" then
+	if query == "" then
 		local shown = 0
-		for _, w in ipairs(found) do
+		for _, word in ipairs(found) do
 			shown += 1
 			if shown > 18 then
 				break
 			end
-			AddItem(w, Color3.fromRGB(120, 150, 255))
+			addItem(word, Color3.fromRGB(120, 150, 255))
 		end
 	else
 		local shown = 0
-		for _, w in ipairs(found) do
+		for _, word in ipairs(found) do
 			shown += 1
 			if shown > 26 then
 				break
 			end
 			local tag: Color3? = nil
-			if type(Hub.isPriority) == "function" and Hub.isPriority(w) then
+			if isPriority(word) then
 				tag = Color3.fromRGB(255, 190, 70)
 			end
-			AddItem(w, tag)
+			addItem(word, tag)
 		end
 	end
 
-	Results.CanvasSize = UDim2.new(0, 0, 0, List.AbsoluteContentSize.Y + 6)
+	refreshCanvas()
 end
 
-Search:GetPropertyChangedSignal("Text"):Connect(Refresh)
+SearchBox:GetPropertyChangedSignal("Text"):Connect(refresh)
 
-Search.Focused:Connect(function()
-	Tw(SStroke, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+SearchBox.Focused:Connect(function()
+	tween(SearchStroke, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		Color = Color3.fromRGB(96, 112, 255),
 	})
 end)
 
-Search.FocusLost:Connect(function()
-	Tw(SStroke, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+SearchBox.FocusLost:Connect(function()
+	tween(SearchStroke, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		Color = Color3.fromRGB(49, 49, 60),
 	})
 end)
 
-MinB.MouseButton1Click:Connect(function()
+MinButton.MouseButton1Click:Connect(function()
 	minimized = not minimized
 	Body.Visible = not minimized
-	RH.Visible = not minimized
+	ResizeHandle.Visible = not minimized
 
 	local w = Root.AbsoluteSize.X > 0 and Root.AbsoluteSize.X or 360
-	local h = minimized and 32 or 250
+	local h = minimized and 32 or 254
 
-	Tw(Root, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	tween(Root, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		Size = UDim2.fromOffset(w, h),
 	})
-	SyncShade()
+	syncShade()
 end)
 
-ClsB.MouseButton1Click:Connect(function()
-	Tw(Scale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.94 })
+CloseButton.MouseButton1Click:Connect(function()
+	tween(Scale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Scale = 0.94,
+	})
 	task.delay(0.05, function()
 		if Gui then
 			Gui:Destroy()
@@ -679,7 +772,6 @@ ClsB.MouseButton1Click:Connect(function()
 end)
 
 local dragInput: InputObject? = nil
-
 Bar.InputBegan:Connect(function(input)
 	if minimized then
 		return
@@ -703,16 +795,16 @@ Bar.InputChanged:Connect(function(input)
 	end
 end)
 
-U.InputChanged:Connect(function(input)
+UserInputService.InputChanged:Connect(function(input)
 	if dragging and dragInput and input == dragInput and dragStart and dragPos then
-		local d = input.Position - dragStart
+		local delta = input.Position - dragStart
 		Root.Position = UDim2.new(
 			dragPos.X.Scale,
-			dragPos.X.Offset + d.X,
+			dragPos.X.Offset + delta.X,
 			dragPos.Y.Scale,
-			dragPos.Y.Offset + d.Y
+			dragPos.Y.Offset + delta.Y
 		)
-		SyncShade()
+		syncShade()
 	end
 end)
 
@@ -732,46 +824,31 @@ local function beginResize(input: InputObject)
 	end
 end
 
-RH.InputBegan:Connect(beginResize)
+ResizeHandle.InputBegan:Connect(beginResize)
 
-U.InputChanged:Connect(function(input)
+UserInputService.InputChanged:Connect(function(input)
 	if resizing and resizeStart and resizeSize then
 		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-			local d = input.Position - resizeStart
-			local nw = N(resizeSize.X + d.X, MIN_W, MAX_W)
-			local nh = N(resizeSize.Y + d.Y, MIN_H, MAX_H)
-			Root.Size = UDim2.fromOffset(nw, nh)
-			SyncShade()
+			local delta = input.Position - resizeStart
+			local newW = clamp(resizeSize.X + delta.X, MIN_W, MAX_W)
+			local newH = clamp(resizeSize.Y + delta.Y, MIN_H, MAX_H)
+			Root.Size = UDim2.fromOffset(newW, newH)
+			syncShade()
 			if not minimized then
-				Results.CanvasSize = UDim2.new(0, 0, 0, List.AbsoluteContentSize.Y + 6)
+				refreshCanvas()
 			end
 		end
 	end
 end)
 
 Root:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
-	SyncShade()
+	syncShade()
 	if not minimized then
-		Results.CanvasSize = UDim2.new(0, 0, 0, List.AbsoluteContentSize.Y + 6)
+		refreshCanvas()
 	end
 end)
 
-if type(Hub.getStats) == "function" then
-	local st = Hub.getStats()
-	if type(st) == "table" then
-		Stats.Text = string.format(
-			"그룹 %d · 전체 %d · 우선 %d",
-			tonumber(st.groups) or 0,
-			tonumber(st.unique) or 0,
-			tonumber(st.special) or 0
-		)
-	else
-		Stats.Text = "준비 완료"
-	end
-else
-	Stats.Text = "준비 완료"
-end
-
-OpenAnim()
-Refresh()
-SyncShade()
+Stats.Text = getStatsText()
+openAnim()
+refresh()
+syncShade()
