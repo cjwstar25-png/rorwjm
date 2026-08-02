@@ -224,7 +224,7 @@ create("Frame", {
 local Title = create("TextLabel", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
-	Text = "WordScript CoreUI",
+	Text = "끝말잇기",
 	TextColor3 = Color3.fromRGB(242, 242, 248),
 	TextSize = 13,
 	Font = Enum.Font.GothamSemibold,
@@ -237,7 +237,7 @@ Title.Size = UDim2.new(1, -120, 1, 0)
 local Subtitle = create("TextLabel", {
 	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
-	Text = "검색 · 추천 · 복사",
+	Text = "Cube",
 	TextColor3 = Color3.fromRGB(150, 150, 160),
 	TextSize = 10,
 	Font = Enum.Font.Gotham,
