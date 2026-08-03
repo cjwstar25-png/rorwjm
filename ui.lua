@@ -1,14 +1,4 @@
-```lua
 --!strict
--- ui.lua | WordScript Hub
--- 기능:
--- 1) word.lua (GitHub Raw) 로드
--- 2) PlayerGui/CoreGui를 0.1초마다 감시
--- 3) 현재 표시 중인 한국어 단어를 추출
--- 4) 그 끝글자 기준으로 가장 길거나 희귀한 후보를 표시
--- 5) "단어검색" / "불러오기" 탭 분리
--- 6) 드래그 가능, 작은 크기, 배경 투명도 0.25
-
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
@@ -106,7 +96,7 @@ end
 
 local function safeVisibleText(inst: Instance): string
 	if inst:IsDescendantOf(workspace) then
-		-- workspace 쪽은 이번 구조에서 감시 대상이 아님
+
 	end
 
 	if inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox") then
@@ -423,20 +413,17 @@ local function detectCurrentWord(): (string, string)
 				-- no-op
 			end
 
-			-- 우리의 UI는 제외
 			if obj:IsDescendantOf(script.Parent) then
 				continue
 			end
 
 			local text = safeVisibleText(obj)
 			if text ~= "" then
-				-- 너무 흔한 UI 문구는 제외
+
 				if not blacklistTexts[text] then
 					bestWord = text
 					bestSource = obj:GetFullName()
 
-					-- 최근 변경된 텍스트를 우선적으로 잡기 위해
-					-- 현재 스캔에서 발견한 마지막 유효 텍스트를 사용
 				end
 			end
 		end
@@ -954,7 +941,6 @@ closeBtn.MouseButton1Click:Connect(function()
 	screenGui.Enabled = false
 end)
 
--- 드래그
 do
 	local dragging = false
 	local dragStart: Vector2? = nil
@@ -995,11 +981,10 @@ do
 	end)
 end
 
--- 최초 로드
 loadDictionary()
 setTab("load")
 
--- 0.1초마다 자동 감지
+
 task.spawn(function()
 	while screenGui.Parent do
 		if state.autoDetect then
@@ -1016,7 +1001,6 @@ task.spawn(function()
 	end
 end)
 
--- 수동 새로고침용 안전 루프
 task.spawn(function()
 	while screenGui.Parent do
 		if state.activeTab == "search" then
@@ -1026,7 +1010,6 @@ task.spawn(function()
 	end
 end)
 
--- 로딩 실패 메시지 처리
 task.defer(function()
 	if not state.dictionaryLoaded and state.dictionaryError ~= "" then
 		detectedLabel.Text = "현재 단어: 감지 대기"
@@ -1046,4 +1029,3 @@ task.defer(function()
 		err.Parent = loadResults
 	end
 end)
-```
