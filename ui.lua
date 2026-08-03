@@ -7,7 +7,7 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-local WORD_URL = "https://raw.githubusercontent.com/cjwstar25-png/rorwjm/main/word.lua"
+local WORD_URL = "https://raw.githubusercontent.com/cjwstar25-png/rorwjm/refs/heads/main/word.lua"
 local SCAN_INTERVAL = 0.1
 local MAX_RESULTS = 10
 
