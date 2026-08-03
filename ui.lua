@@ -121,7 +121,7 @@ local function safeVisibleText(inst: Instance): string
 		if blacklistTexts[txt] then
 			return ""
 		end
-
+ 
 		local normalized = normalizeForIndex(txt)
 		if not isHangulOnly(normalized) then
 			return ""
