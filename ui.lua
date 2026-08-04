@@ -10,7 +10,6 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local WORD_URL = "https://raw.githubusercontent.com/cjwstar25-png/rorwjm/refs/heads/main/word.lua"
 local SCAN_INTERVAL = 0.1
 local MAX_RESULTS = 10
-
 local GUI_NAME = "WordScriptHub_Core"
 
 local Q_MARKS = { "'", '"', "‘", "’", "“", "”" }
@@ -21,17 +20,15 @@ local state = {
 	dictionaryError = "",
 	totalWords = 0,
 
-	activeTab = "load",
-
+	activeTab = "load" :: "search" | "load",
 	autoDetect = true,
+
 	currentRawPrompt = "",
 	currentPrefix = "",
 	currentSource = "",
+	version = "",
+	title = "",
 }
-
-local dictionaryWords: {string} = {}
-local indexByStart: {[string]: {string}} = {}
-local seenWords: {[string]: boolean} = {}
 
 local specialForcedByPrefix: {[string]: {string}} = {
 	["기"] = { "기동돓", "기역" },
@@ -60,22 +57,14 @@ local blacklistTexts = {
 	["검색 준비"] = true,
 	["불러오기 상태"] = true,
 	["현재 문구"] = true,
+	["탐지 문구"] = true,
+	["최우선 추천"] = true,
+	["한방단어 기반 정렬"] = true,
+	["탐지 후 자동 추천"] = true,
+	["대기 중"] = true,
+	["후보 없음"] = true,
+	["글자로부터 시작하는 단어가 없습니다."] = true,
 }
-
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = GUI_NAME
-screenGui.ResetOnSpawn = false
-screenGui.IgnoreGuiInset = true
-screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-screenGui.DisplayOrder = 9999
-
-pcall(function()
-	screenGui.Parent = CoreGui
-end)
-
-if screenGui.Parent == nil then
-	screenGui.Parent = PlayerGui
-end
 
 local function trim(s: string): string
 	return (s:gsub("^%s+", ""):gsub("%s+$", ""))
@@ -121,10 +110,19 @@ local function makeTween(obj: Instance, ti: TweenInfo, props: {[string]: any})
 	return tween
 end
 
+local function clearChildren(frame: Instance)
+	for _, child in ipairs(frame:GetChildren()) do
+		if child:IsA("GuiObject") and child.Name ~= "UIListLayout" and child.Name ~= "UIPadding" then
+			child:Destroy()
+		end
+	end
+end
+
 local function safeTextOf(instance: Instance): string
 	local ok, text = pcall(function()
 		return (instance :: any).Text
 	end)
+
 	if not ok then
 		return ""
 	end
@@ -179,7 +177,6 @@ local function extractSearchPrefix(text: string): string
 		return prefix
 	end
 
-	-- manual input fallback
 	local clean = normalizeHangul(text)
 	if clean ~= "" and graphemeCount(clean) <= 10 then
 		return clean
@@ -249,264 +246,160 @@ local function candidateScore(word: string): number
 	return score
 end
 
-local function clearChildren(frame: Instance)
-	for _, child in ipairs(frame:GetChildren()) do
-		if child:IsA("GuiObject") and child.Name ~= "UIListLayout" and child.Name ~= "UIPadding" then
-			child:Destroy()
-		end
-	end
-end
+local function getScreenRoot()
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = GUI_NAME
+	screenGui.ResetOnSpawn = false
+	screenGui.IgnoreGuiInset = true
+	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	screenGui.DisplayOrder = 9999
 
-local function addWord(rawWord: string)
-	local word = trim(tostring(rawWord or ""))
-	local key = normalizeHangul(word)
-	if key == "" then
-		return
-	end
-
-	if seenWords[key] then
-		return
-	end
-
-	seenWords[key] = true
-	table.insert(dictionaryWords, word)
-
-	local first = firstGrapheme(key)
-	if first ~= "" then
-		indexByStart[first] = indexByStart[first] or {}
-		table.insert(indexByStart[first], word)
-	end
-end
-
-local function ingestDictionary(result: any)
-	if type(result) ~= "table" then
-		return
-	end
-
-	local function ingestArray(arr: any)
-		if type(arr) ~= "table" then
-			return
-		end
-		for _, v in ipairs(arr) do
-			if type(v) == "string" then
-				addWord(v)
-			end
-		end
-	end
-
-	if type(result.words) == "table" then
-		ingestArray(result.words)
-		return
-	end
-
-	if type(result.Words) == "table" then
-		ingestArray(result.Words)
-		return
-	end
-
-	if type(result.data) == "table" then
-		ingestArray(result.data)
-		return
-	end
-
-	ingestArray(result)
-end
-
-local function loadDictionary()
-	if state.dictionaryLoading then
-		return
-	end
-
-	state.dictionaryLoading = true
-	state.dictionaryLoaded = false
-	state.dictionaryError = ""
-
-	table.clear(dictionaryWords)
-	table.clear(indexByStart)
-	table.clear(seenWords)
-
-	local ok, result = pcall(function()
-		return loadstring(game:HttpGet(WORD_URL))()
+	local ok = pcall(function()
+		screenGui.Parent = CoreGui
 	end)
 
-	if not ok then
-		state.dictionaryError = tostring(result)
-		state.dictionaryLoading = false
-		return
+	if not ok or screenGui.Parent == nil then
+		screenGui.Parent = PlayerGui
 	end
 
-	if type(result) ~= "table" then
-		state.dictionaryError = "word.lua가 table을 반환하지 않았습니다."
-		state.dictionaryLoading = false
-		return
-	end
-
-	ingestDictionary(result)
-
-	state.totalWords = #dictionaryWords
-	state.dictionaryLoaded = true
-	state.dictionaryLoading = false
+	return screenGui
 end
 
-local function mergeForcedCandidates(prefix: string, pool: {string}): {string}
-	local result: {string} = {}
-	local used: {[string]: boolean} = {}
-
-	local forced = specialForcedByPrefix[prefix]
-	if forced then
-		for _, word in ipairs(forced) do
-			local key = normalizeHangul(word)
-			if key ~= "" and not used[key] then
-				used[key] = true
-				table.insert(result, word)
-			end
-		end
-	end
-
-	for _, word in ipairs(pool) do
-		local key = normalizeHangul(word)
-		if key ~= "" and not used[key] then
-			used[key] = true
-			table.insert(result, word)
-		end
-	end
-
-	return result
-end
-
-local function sortCandidates(prefix: string, candidates: {string}): {string}
-	local forcedOrder: {[string]: number} = {}
-	local forced = specialForcedByPrefix[prefix]
-	if forced then
-		for i, word in ipairs(forced) do
-			forcedOrder[normalizeHangul(word)] = 1000 - i
-		end
-	end
-
-	table.sort(candidates, function(a, b)
-		local ka = normalizeHangul(a)
-		local kb = normalizeHangul(b)
-
-		local fa = forcedOrder[ka] or 0
-		local fb = forcedOrder[kb] or 0
-		if fa ~= fb then
-			return fa > fb
-		end
-
-		local sa = candidateScore(ka)
-		local sb = candidateScore(kb)
-		if sa ~= sb then
-			return sa > sb
-		end
-
-		local la = graphemeCount(ka)
-		local lb = graphemeCount(kb)
-		if la ~= lb then
-			return la > lb
-		end
-
-		local ra = rarityScore(ka)
-		local rb = rarityScore(kb)
-		if ra ~= rb then
-			return ra > rb
-		end
-
-		return a < b
+local function bindHover(button: TextButton, normalColor: Color3, hoverColor: Color3)
+	button.MouseEnter:Connect(function()
+		makeTween(button, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			BackgroundColor3 = hoverColor,
+		})
 	end)
 
-	return candidates
-end
-
-local function getPrefixCandidates(prefix: string): {string}
-	prefix = normalizeHangul(prefix)
-	if prefix == "" then
-		return {}
-	end
-
-	local first = firstGrapheme(prefix)
-	local pool = indexByStart[first] or {}
-
-	local filtered: {string} = {}
-	for _, word in ipairs(pool) do
-		local key = normalizeHangul(word)
-		if key:sub(1, #prefix) == prefix then
-			table.insert(filtered, word)
-		end
-	end
-
-	filtered = mergeForcedCandidates(prefix, filtered)
-	filtered = sortCandidates(prefix, filtered)
-
-	local out: {string} = {}
-	for i = 1, math.min(MAX_RESULTS, #filtered) do
-		out[i] = filtered[i]
-	end
-	return out
-end
-
-local function getSearchCandidates(query: string): (string, {string})
-	query = trim(query)
-	local prefix = extractSearchPrefix(query)
-	if prefix == "" then
-		return "", {}
-	end
-
-	return prefix, getPrefixCandidates(prefix)
-end
-
-local function makeChip(parent: Instance, label: string, x: number, w: number, color: Color3)
-	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.fromOffset(w, 28)
-	btn.Position = UDim2.fromOffset(x, 0)
-	btn.BackgroundColor3 = color
-	btn.BackgroundTransparency = 0.06
-	btn.BorderSizePixel = 0
-	btn.Text = label
-	btn.TextSize = 12
-	btn.Font = Enum.Font.GothamSemibold
-	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	btn.AutoButtonColor = false
-	btn.Parent = parent
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 8)
-	corner.Parent = btn
-
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = Color3.fromRGB(255, 255, 255)
-	stroke.Transparency = 0.82
-	stroke.Thickness = 1
-	stroke.Parent = btn
-
-	return btn
-end
-
-local function makeCard(parent: Instance, height: number, background: Color3)
-	local frame = Instance.new("Frame")
-	frame.Size = UDim2.new(1, 0, 0, height)
-	frame.BackgroundColor3 = background
-	frame.BackgroundTransparency = 0.08
-	frame.BorderSizePixel = 0
-	frame.Parent = parent
-
-	local c = Instance.new("UICorner")
-	c.CornerRadius = UDim.new(0, 14)
-	c.Parent = frame
-
-	local s = Instance.new("UIStroke")
-	s.Color = Color3.fromRGB(85, 85, 104)
-	s.Transparency = 0.36
-	s.Thickness = 1
-	s.Parent = frame
-
-	return frame, s
+	button.MouseLeave:Connect(function()
+		makeTween(button, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			BackgroundColor3 = normalColor,
+		})
+	end)
 end
 
 local function buildUI()
+	local screenGui = getScreenRoot()
+
+	local hub: any = nil
+
+	local function hubSupportsIndex()
+		return hub and type(hub) == "table" and type(hub.index) == "table"
+	end
+
+	local function hubGetStats()
+		if not hub or type(hub) ~= "table" then
+			return nil
+		end
+		if type(hub.getStats) == "function" then
+			local ok, stats = pcall(function()
+				return hub.getStats()
+			end)
+			if ok and type(stats) == "table" then
+				return stats
+			end
+		end
+		return nil
+	end
+
+	local function hubByFirst(key: string): {string}
+		if hub and type(hub) == "table" then
+			if type(hub.getByFirst) == "function" then
+				local ok, arr = pcall(function()
+					return hub.getByFirst(key)
+				end)
+				if ok and type(arr) == "table" then
+					return arr
+				end
+			end
+
+			if type(hub.index) == "table" and type(hub.index.byFirst) == "table" then
+				return hub.index.byFirst[key] or {}
+			end
+		end
+		return {}
+	end
+
+	local function hubByLast(key: string): {string}
+		if hub and type(hub) == "table" then
+			if type(hub.getByLast) == "function" then
+				local ok, arr = pcall(function()
+					return hub.getByLast(key)
+				end)
+				if ok and type(arr) == "table" then
+					return arr
+				end
+			end
+
+			if type(hub.index) == "table" and type(hub.index.byLast) == "table" then
+				return hub.index.byLast[key] or {}
+			end
+		end
+		return {}
+	end
+
+	local function isPriorityWord(word: string): boolean
+		if hub and type(hub) == "table" then
+			if type(hub.isPriority) == "function" then
+				local ok, result = pcall(function()
+					return hub.isPriority(word)
+				end)
+				if ok and result == true then
+					return true
+				end
+			end
+
+			if type(hub.index) == "table" and type(hub.index.priority) == "table" then
+				return hub.index.priority[word] == true
+			end
+		end
+		return false
+	end
+
+	local function ingestHub(result: any)
+		if type(result) ~= "table" then
+			return
+		end
+
+		hub = result
+	end
+
+	local state = {
+		dictionaryLoaded = false,
+		dictionaryLoading = false,
+		dictionaryError = "",
+		totalWords = 0,
+
+		activeTab = "load" :: "search" | "load",
+		autoDetect = true,
+
+		currentRawPrompt = "",
+		currentPrefix = "",
+		currentSource = "",
+
+		isDragging = false,
+		isResizing = false,
+		dragStart = Vector2.zero,
+		startPos = UDim2.new(),
+		resizeStart = Vector2.zero,
+		startSize = Vector2.new(),
+	}
+
+	local mainMin = Vector2.new(520, 410)
+	local mainMax = Vector2.new(980, 760)
+
+	local function clampMainSize(size: Vector2): Vector2
+		return Vector2.new(
+			math.clamp(size.X, mainMin.X, mainMax.X),
+			math.clamp(size.Y, mainMin.Y, mainMax.Y)
+		)
+	end
+
 	local main = Instance.new("Frame")
 	main.Name = "Main"
 	main.AnchorPoint = Vector2.new(0.5, 0.5)
-	main.Size = UDim2.fromOffset(560, 380)
+	main.Size = UDim2.fromOffset(620, 430)
 	main.Position = UDim2.new(0.5, 0, 0.42, 0)
 	main.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
 	main.BackgroundTransparency = 0.25
@@ -527,16 +420,6 @@ local function buildUI()
 	local mainScale = Instance.new("UIScale")
 	mainScale.Scale = 0.94
 	mainScale.Parent = main
-
-	local shadow = Instance.new("Frame")
-	shadow.Name = "Shadow"
-	shadow.Size = UDim2.new(1, 16, 1, 16)
-	shadow.Position = UDim2.fromOffset(-8, -8)
-	shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-	shadow.BackgroundTransparency = 1
-	shadow.BorderSizePixel = 0
-	shadow.ZIndex = 0
-	shadow.Parent = main
 
 	local topBar = Instance.new("Frame")
 	topBar.Name = "TopBar"
@@ -576,10 +459,10 @@ local function buildUI()
 	statusChip.BackgroundColor3 = Color3.fromRGB(56, 86, 170)
 	statusChip.BackgroundTransparency = 0.08
 	statusChip.BorderSizePixel = 0
-	statusChip.Size = UDim2.fromOffset(118, 26)
-	statusChip.Position = UDim2.new(1, -134, 0, 10)
+	statusChip.Size = UDim2.fromOffset(166, 26)
+	statusChip.Position = UDim2.new(1, -182, 0, 10)
 	statusChip.Font = Enum.Font.GothamSemibold
-	statusChip.Text = "CoreGUI / LIVE"
+	statusChip.Text = "COREGUI · LIVE"
 	statusChip.TextSize = 11
 	statusChip.TextColor3 = Color3.fromRGB(255, 255, 255)
 	statusChip.ZIndex = 3
@@ -588,6 +471,18 @@ local function buildUI()
 	local statusCorner = Instance.new("UICorner")
 	statusCorner.CornerRadius = UDim.new(0, 8)
 	statusCorner.Parent = statusChip
+
+	local sizeBadge = Instance.new("TextLabel")
+	sizeBadge.BackgroundTransparency = 1
+	sizeBadge.Position = UDim2.new(1, -182, 0, 0)
+	sizeBadge.Size = UDim2.fromOffset(166, 10)
+	sizeBadge.Font = Enum.Font.Gotham
+	sizeBadge.Text = "620 × 430"
+	sizeBadge.TextSize = 10
+	sizeBadge.TextColor3 = Color3.fromRGB(168, 168, 180)
+	sizeBadge.TextXAlignment = Enum.TextXAlignment.Right
+	sizeBadge.ZIndex = 3
+	sizeBadge.Parent = topBar
 
 	local tabs = Instance.new("Frame")
 	tabs.Name = "Tabs"
@@ -605,7 +500,7 @@ local function buildUI()
 
 	local function tabButton(text: string)
 		local btn = Instance.new("TextButton")
-		btn.Size = UDim2.fromOffset(128, 34)
+		btn.Size = UDim2.fromOffset(140, 34)
 		btn.BackgroundColor3 = Color3.fromRGB(34, 34, 42)
 		btn.BackgroundTransparency = 0.06
 		btn.BorderSizePixel = 0
@@ -627,7 +522,7 @@ local function buildUI()
 		s.Thickness = 1
 		s.Parent = btn
 
-		return btn, s
+		return btn
 	end
 
 	local searchTabBtn = tabButton("단어검색")
@@ -635,7 +530,7 @@ local function buildUI()
 
 	local tabIndicator = Instance.new("Frame")
 	tabIndicator.Name = "TabIndicator"
-	tabIndicator.Size = UDim2.fromOffset(128, 3)
+	tabIndicator.Size = UDim2.fromOffset(140, 3)
 	tabIndicator.Position = UDim2.fromOffset(14, 89)
 	tabIndicator.BackgroundColor3 = Color3.fromRGB(94, 129, 255)
 	tabIndicator.BorderSizePixel = 0
@@ -661,7 +556,7 @@ local function buildUI()
 	searchPage.Size = UDim2.new(1, 0, 1, 0)
 	searchPage.Visible = false
 	searchPage.GroupTransparency = 1
-	searchPage.Position = UDim2.new(0, 26, 0, 0)
+	searchPage.Position = UDim2.new(0, -24, 0, 0)
 	searchPage.Parent = content
 
 	local loadPage = Instance.new("CanvasGroup")
@@ -695,7 +590,6 @@ local function buildUI()
 		return panel
 	end
 
-	-- Search page
 	local searchControls = pagePanel(searchPage, 0, 84)
 	local searchSpotlight = pagePanel(searchPage, 94, 62)
 	local searchListPanel = pagePanel(searchPage, 164, 138)
@@ -798,7 +692,6 @@ local function buildUI()
 	searchListPad.PaddingTop = UDim.new(0, 2)
 	searchListPad.Parent = searchList
 
-	-- Load page
 	local loadControls = pagePanel(loadPage, 0, 84)
 	local loadSpotlight = pagePanel(loadPage, 94, 62)
 	local loadListPanel = pagePanel(loadPage, 164, 138)
@@ -957,13 +850,14 @@ local function buildUI()
 		return row
 	end
 
-	local function renderResults(frame: ScrollingFrame, layout: UIListLayout, sourceText: string, sourcePrefix: string, candidates: {string}, spotText: TextLabel, spotInfo: TextLabel, headlineLabel: TextLabel)
+	local function renderResults(frame: ScrollingFrame, layout: UIListLayout, prefix: string, candidates: {string}, spotText: TextLabel, spotInfo: TextLabel, headlineLabel: TextLabel)
 		clearChildren(frame)
 
-		if sourcePrefix == "" then
+		if prefix == "" then
 			spotText.Text = "-"
 			spotInfo.Text = "대기 중"
 			headlineLabel.Text = "문구를 기다리는 중"
+
 			local empty = Instance.new("TextLabel")
 			empty.Size = UDim2.new(1, 0, 0, 24)
 			empty.BackgroundTransparency = 1
@@ -973,6 +867,7 @@ local function buildUI()
 			empty.Font = Enum.Font.Gotham
 			empty.TextXAlignment = Enum.TextXAlignment.Left
 			empty.Parent = frame
+
 			updateCanvas(frame, layout)
 			return
 		end
@@ -980,7 +875,8 @@ local function buildUI()
 		if #candidates == 0 then
 			spotText.Text = "-"
 			spotInfo.Text = "후보 없음"
-			headlineLabel.Text = string.format("'%s' 로 시작하는 단어", sourcePrefix)
+			headlineLabel.Text = string.format("'%s' 로 시작하는 단어", prefix)
+
 			local empty = Instance.new("TextLabel")
 			empty.Size = UDim2.new(1, 0, 0, 24)
 			empty.BackgroundTransparency = 1
@@ -990,6 +886,7 @@ local function buildUI()
 			empty.Font = Enum.Font.Gotham
 			empty.TextXAlignment = Enum.TextXAlignment.Left
 			empty.Parent = frame
+
 			updateCanvas(frame, layout)
 			return
 		end
@@ -998,7 +895,7 @@ local function buildUI()
 		local bestKey = normalizeHangul(best)
 		spotText.Text = best
 		spotInfo.Text = string.format("길이 %d / 점수 %d", graphemeCount(bestKey), candidateScore(bestKey))
-		headlineLabel.Text = string.format("'%s' 로 시작하는 단어", sourcePrefix)
+		headlineLabel.Text = string.format("'%s' 로 시작하는 단어", prefix)
 
 		for i, word in ipairs(candidates) do
 			local key = normalizeHangul(word)
@@ -1031,10 +928,208 @@ local function buildUI()
 	loadHeadline.TextXAlignment = Enum.TextXAlignment.Left
 	loadHeadline.Parent = loadPage
 
+	local function specialPrefixList(prefix: string): {string}
+		local results: {string} = {}
+		for forcedPrefix, words in pairs(specialForcedByPrefix) do
+			if prefix:sub(1, #forcedPrefix) == forcedPrefix then
+				for _, word in ipairs(words) do
+					table.insert(results, word)
+				end
+			end
+		end
+		return results
+	end
+
+	local function mergeUnique(listA: {string}, listB: {string}): {string}
+		local out: {string} = {}
+		local seen: {[string]: boolean} = {}
+
+		for _, word in ipairs(listA) do
+			local key = normalizeHangul(word)
+			if key ~= "" and not seen[key] then
+				seen[key] = true
+				table.insert(out, word)
+			end
+		end
+
+		for _, word in ipairs(listB) do
+			local key = normalizeHangul(word)
+			if key ~= "" and not seen[key] then
+				seen[key] = true
+				table.insert(out, word)
+			end
+		end
+
+		return out
+	end
+
+	local function sortCandidates(prefix: string, candidates: {string}): {string}
+		local forcedOrder: {[string]: number} = {}
+		for i, word in ipairs(specialPrefixList(prefix)) do
+			forcedOrder[normalizeHangul(word)] = 1000 - i
+		end
+
+		table.sort(candidates, function(a, b)
+			local ka = normalizeHangul(a)
+			local kb = normalizeHangul(b)
+
+			local fa = forcedOrder[ka] or 0
+			local fb = forcedOrder[kb] or 0
+			if fa ~= fb then
+				return fa > fb
+			end
+
+			local priorityA = isPriorityWord(ka) and 1 or 0
+			local priorityB = isPriorityWord(kb) and 1 or 0
+			if priorityA ~= priorityB then
+				return priorityA > priorityB
+			end
+
+			local sa = candidateScore(ka)
+			local sb = candidateScore(kb)
+			if sa ~= sb then
+				return sa > sb
+			end
+
+			local la = graphemeCount(ka)
+			local lb = graphemeCount(kb)
+			if la ~= lb then
+				return la > lb
+			end
+
+			local ra = rarityScore(ka)
+			local rb = rarityScore(kb)
+			if ra ~= rb then
+				return ra > rb
+			end
+
+			return a < b
+		end)
+
+		return candidates
+	end
+
+	local function getPrefixCandidates(prefix: string): {string}
+		prefix = normalizeHangul(prefix)
+		if prefix == "" then
+			return {}
+		end
+
+		local first = firstGrapheme(prefix)
+		if first == "" then
+			return {}
+		end
+
+		local pool = hubByFirst(first)
+		local filtered: {string} = {}
+
+		for _, word in ipairs(pool) do
+			local key = normalizeHangul(word)
+			if key ~= "" and key:sub(1, #prefix) == prefix then
+				table.insert(filtered, word)
+			end
+		end
+
+		local forced = specialPrefixList(prefix)
+		local merged = mergeUnique(forced, filtered)
+		merged = sortCandidates(prefix, merged)
+
+		local out: {string} = {}
+		for i = 1, math.min(MAX_RESULTS, #merged) do
+			out[i] = merged[i]
+		end
+		return out
+	end
+
+	local function getSearchCandidates(query: string)
+		query = trim(query)
+		local prefix = extractSearchPrefix(query)
+		if prefix == "" then
+			return "", {}
+		end
+		return prefix, getPrefixCandidates(prefix)
+	end
+
+	local function resizePanels()
+		local contentHeight = math.max(180, content.AbsoluteSize.Y)
+		local listY = 164
+		local listHeight = math.max(72, contentHeight - listY)
+
+		searchControls.Size = UDim2.new(1, 0, 0, 84)
+		searchSpotlight.Position = UDim2.fromOffset(0, 94)
+		searchSpotlight.Size = UDim2.new(1, 0, 0, 62)
+		searchListPanel.Position = UDim2.fromOffset(0, listY)
+		searchListPanel.Size = UDim2.new(1, 0, 0, listHeight)
+
+		loadControls.Size = UDim2.new(1, 0, 0, 84)
+		loadSpotlight.Position = UDim2.fromOffset(0, 94)
+		loadSpotlight.Size = UDim2.new(1, 0, 0, 62)
+		loadListPanel.Position = UDim2.fromOffset(0, listY)
+		loadListPanel.Size = UDim2.new(1, 0, 0, listHeight)
+
+		searchList.Size = UDim2.new(1, -20, 1, -18)
+		loadList.Size = UDim2.new(1, -20, 1, -18)
+
+		sizeBadge.Text = string.format("%d × %d", math.floor(main.AbsoluteSize.X), math.floor(main.AbsoluteSize.Y))
+	end
+
+	local function loadDictionary()
+		if state.dictionaryLoading then
+			return
+		end
+
+		state.dictionaryLoading = true
+		state.dictionaryLoaded = false
+		state.dictionaryError = ""
+
+		local ok, result = pcall(function()
+			return loadstring(game:HttpGet(WORD_URL))()
+		end)
+
+		if not ok then
+			state.dictionaryError = tostring(result)
+			state.dictionaryLoading = false
+			state.dictionaryLoaded = false
+			return
+		end
+
+		ingestHub(result)
+
+		if not hubSupportsIndex() then
+			state.dictionaryError = "WordHub 구조(index)가 없습니다."
+			state.dictionaryLoading = false
+			state.dictionaryLoaded = false
+			return
+		end
+
+		local stats = hubGetStats()
+		if stats then
+			state.totalWords = tonumber(stats.words) or (hub.index and #hub.index.all or 0)
+			state.version = tostring(stats.version or "")
+			state.title = tostring(stats.title or "")
+		else
+			state.totalWords = (hub.index and hub.index.all and #hub.index.all) or 0
+		end
+
+		state.dictionaryLoaded = true
+		state.dictionaryLoading = false
+	end
+
+	local function applyLoadedStatus()
+		local statsText = "COREGUI · LIVE"
+		if state.version ~= "" then
+			statsText = state.version .. " · LIVE"
+		end
+		if state.totalWords > 0 then
+			statsText = statsText .. " · " .. tostring(state.totalWords) .. "개"
+		end
+		statusChip.Text = statsText
+	end
+
 	local function updateSearch()
 		local prefix, candidates = getSearchCandidates(searchBox.Text)
 		searchHeadline.Text = prefix ~= "" and string.format("'%s' 로 시작하는 단어", prefix) or "검색 결과"
-		renderResults(searchList, searchListLayout, searchBox.Text, prefix, candidates, searchSpotText, searchSpotInfo, searchHeadline)
+		renderResults(searchList, searchListLayout, prefix, candidates, searchSpotText, searchSpotInfo, searchHeadline)
 	end
 
 	local function updateLoad()
@@ -1062,54 +1157,43 @@ local function buildUI()
 			updateCanvas(loadList, loadListLayout)
 			return
 		end
+
 		loadHeadline.Text = prefix ~= "" and string.format("'%s' 로 시작하는 단어", prefix) or "탐지 대기"
-
 		local candidates = getPrefixCandidates(prefix)
-		renderResults(loadList, loadListLayout, prompt, prefix, candidates, loadSpotText, loadSpotInfo, loadHeadline)
+		renderResults(loadList, loadListLayout, prefix, candidates, loadSpotText, loadSpotInfo, loadHeadline)
 	end
-
-	local tabsState = {
-		search = {
-			btn = searchTabBtn,
-			page = searchPage,
-			x = 14,
-		},
-		load = {
-			btn = loadTabBtn,
-			page = loadPage,
-			x = 152,
-		},
-	}
 
 	local function setActiveTab(tabName: "search" | "load")
 		state.activeTab = tabName
 
-		local target = tabsState[tabName]
-		local other = tabsState[tabName == "search" and "load" or "search"]
+		local target = tabName == "search" and searchPage or loadPage
+		local other = tabName == "search" and loadPage or searchPage
 
-		for key, item in pairs(tabsState) do
-			local active = key == tabName
-			item.btn.BackgroundColor3 = active and Color3.fromRGB(66, 93, 182) or Color3.fromRGB(34, 34, 42)
-			item.btn.TextColor3 = active and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(220, 220, 230)
-		end
+		searchTabBtn.BackgroundColor3 = tabName == "search" and Color3.fromRGB(66, 93, 182) or Color3.fromRGB(34, 34, 42)
+		loadTabBtn.BackgroundColor3 = tabName == "load" and Color3.fromRGB(66, 93, 182) or Color3.fromRGB(34, 34, 42)
 
+		searchTabBtn.TextColor3 = tabName == "search" and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(220, 220, 230)
+		loadTabBtn.TextColor3 = tabName == "load" and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(220, 220, 230)
+
+		local indicatorX = tabName == "search" and 14 or 164
 		makeTween(tabIndicator, TweenInfo.new(0.24, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
-			Position = UDim2.fromOffset(target.x, 89),
+			Position = UDim2.fromOffset(indicatorX, 89),
 		})
 
-		target.page.Visible = true
-		makeTween(target.page, TweenInfo.new(0.24, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+		target.Visible = true
+		makeTween(target, TweenInfo.new(0.24, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
 			GroupTransparency = 0,
 			Position = UDim2.new(0, 0, 0, 0),
 		})
 
-		makeTween(other.page, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+		makeTween(other, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
 			GroupTransparency = 1,
 			Position = UDim2.new(0, -24, 0, 0),
 		})
+
 		task.delay(0.22, function()
-			if state.activeTab ~= (tabName == "search" and "load" or "search") then
-				other.page.Visible = false
+			if state.activeTab ~= tabName then
+				other.Visible = false
 			end
 		end)
 
@@ -1141,6 +1225,7 @@ local function buildUI()
 
 	reloadBtn.MouseButton1Click:Connect(function()
 		loadDictionary()
+		applyLoadedStatus()
 		updateLoad()
 	end)
 
@@ -1150,7 +1235,6 @@ local function buildUI()
 		autoBtn.BackgroundColor3 = state.autoDetect and Color3.fromRGB(66, 93, 182) or Color3.fromRGB(110, 84, 84)
 	end)
 
-	-- Dragging with top bar only
 	do
 		local dragging = false
 		local dragStart: Vector2? = nil
@@ -1190,6 +1274,52 @@ local function buildUI()
 			)
 		end)
 	end
+
+	local resizeHandle = Instance.new("TextButton")
+	resizeHandle.Name = "ResizeHandle"
+	resizeHandle.Size = UDim2.fromOffset(22, 22)
+	resizeHandle.Position = UDim2.new(1, -24, 1, -24)
+	resizeHandle.BackgroundColor3 = Color3.fromRGB(56, 56, 68)
+	resizeHandle.BackgroundTransparency = 0.15
+	resizeHandle.BorderSizePixel = 0
+	resizeHandle.Text = "↘"
+	resizeHandle.Font = Enum.Font.GothamBold
+	resizeHandle.TextSize = 14
+	resizeHandle.TextColor3 = Color3.fromRGB(245, 245, 250)
+	resizeHandle.ZIndex = 6
+	resizeHandle.Parent = main
+
+	local resizeCorner = Instance.new("UICorner")
+	resizeCorner.CornerRadius = UDim.new(0, 8)
+	resizeCorner.Parent = resizeHandle
+
+	resizeHandle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			state.isResizing = true
+			state.resizeStart = input.Position
+			state.startSize = main.AbsoluteSize
+		end
+	end)
+
+	resizeHandle.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			state.isResizing = false
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if not state.isResizing then
+			return
+		end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement then
+			return
+		end
+
+		local delta = input.Position - state.resizeStart
+		local newSize = clampMainSize(Vector2.new(state.startSize.X + delta.X, state.startSize.Y + delta.Y))
+		main.Size = UDim2.fromOffset(math.floor(newSize.X), math.floor(newSize.Y))
+		resizePanels()
+	end)
 
 	local function animateIntro()
 		mainScale.Scale = 0.94
@@ -1232,7 +1362,11 @@ local function buildUI()
 			end
 		end
 
-		if bestPrefix ~= "" and (bestPrefix ~= state.currentPrefix or bestRaw ~= state.currentRawPrompt or bestSource ~= state.currentSource) then
+		if bestPrefix ~= "" and (
+			bestPrefix ~= state.currentPrefix or
+			bestRaw ~= state.currentRawPrompt or
+			bestSource ~= state.currentSource
+		) then
 			state.currentRawPrompt = bestRaw
 			state.currentPrefix = bestPrefix
 			state.currentSource = bestSource
@@ -1243,10 +1377,23 @@ local function buildUI()
 		end
 	end
 
-	-- Startup
+	-- Hover polish
+	bindHover(searchRunBtn, Color3.fromRGB(66, 93, 182), Color3.fromRGB(84, 110, 196))
+	bindHover(reloadBtn, Color3.fromRGB(62, 132, 95), Color3.fromRGB(79, 148, 111))
+	bindHover(autoBtn, Color3.fromRGB(66, 93, 182), Color3.fromRGB(84, 110, 196))
+	bindHover(searchTabBtn, Color3.fromRGB(34, 34, 42), Color3.fromRGB(46, 46, 58))
+	bindHover(loadTabBtn, Color3.fromRGB(34, 34, 42), Color3.fromRGB(46, 46, 58))
+
+	-- Initial load
 	loadDictionary()
+	applyLoadedStatus()
+	resizePanels()
 	animateIntro()
 	setActiveTab("load")
+
+	main:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		resizePanels()
+	end)
 
 	task.spawn(function()
 		while screenGui.Parent do
@@ -1264,7 +1411,6 @@ local function buildUI()
 		end
 	end)
 
-	-- Initial paint for both pages
 	task.delay(0.1, function()
 		updateLoad()
 		updateSearch()
