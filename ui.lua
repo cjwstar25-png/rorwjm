@@ -801,8 +801,6 @@ local function buildUI()
 	searchListPad.PaddingBottom = UDim.new(0, 4)
 	searchListPad.Parent = searchList
 
-	-- Load controls
-	local currentPromptLabel = createHeaderLabel(loadControls, "탐지 문구", 10)
 	local currentPromptValue = createBodyLabel(loadControls, "감지 대기", 28, 20, Color3.fromRGB(140, 210, 255))
 	local sourceLabel = createBodyLabel(loadControls, "출처: -", 46, 16, Color3.fromRGB(170, 170, 182))
 
